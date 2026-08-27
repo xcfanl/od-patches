@@ -3,6 +3,23 @@
 Out-of-tree **desktop.sock** shim for [OpenDesign](https://github.com/nexu-io/open-design).  
 Implements `render-slides` with system Chrome/Chromium so OpenDesign web can export PPTX **without editing upstream sources**.
 
+Repo umbrella: [../README.md](../README.md).
+
+## 为什么存在
+
+上游 OpenDesign 的 Web「导出 PPTX」会经 daemon 打到 **`desktop.sock`**，契约上由 Electron Desktop 用内置 Chromium 做 `render-slides`（截图或可编辑）。在无桌面、无 Electron、或只想跑 headless 服务的环境里，这个 socket 空着，导出直接失败。
+
+本包存在的理由：
+
+1. **不改 upstream** — 继续用官方 Web / daemon；只在旁边挂一个兼容 `desktop.sock` 的进程。
+2. **用系统 Chrome** — 以 Puppeteer + 本机 Chrome/Chromium 实现同一 IPC，避免再装一套 Electron。
+3. **截图 + 可编辑两条路径** — `editable: false` 出 slide PNG；`editable: true` 走 vendored `dom-to-pptx`，并处理 CJK 字体嵌入等保真问题。
+4. **可当系统服务跑** — 适合机房 / CI / 长期在线的 tools-dev，而不是依赖有人开着 Desktop 窗口。
+
+若上游将来内建 headless renderer 且 IPC 契约不变，本包可以退役；在那之前它填的是「Web 能导出、机器上却没有 Desktop」的缺口。
+
+## What it does
+
 Supports:
 
 - **Screenshot PPTX** — per-slide PNGs → daemon stitches
@@ -25,9 +42,12 @@ Do **not** run Electron OpenDesign desktop on the same IPC namespace (socket con
 Clone this repo and OpenDesign wherever you like — only env/flags matter:
 
 ```text
-<any>/od-patches/desktop-ipc-shim   ← this package
-<any>/open-design                   ← OpenDesign (built)
+<any>/od-patches/                 ← this repository (umbrella)
+<any>/od-patches/desktop-ipc-shim ← this package
+<any>/open-design                 ← OpenDesign (built)
 ```
+
+Repo overview: [../README.md](../README.md).
 
 Paths below use:
 
