@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenDesign desktop IPC shim (Chrome headless render-slides)
+Documentation=file:///home/open-design/specs/current/chrome-headless-slide-renderer/patch-strategy.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/od-patches/desktop-ipc-shim
+Environment=OD_OPEN_DESIGN_ROOT=/home/open-design
+Environment=OD_SIDECAR_NAMESPACE=default
+Environment=OD_BROWSER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+Environment=OD_SHIM_KEEP_BROWSER=1
+Environment=PATH=/root/.nvm/versions/node/v24.19.0/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/root/.nvm/versions/node/v24.19.0/bin/node --import tsx src/main.ts --keep-browser
+Restart=on-failure
+RestartSec=3
+MemoryMax=1536M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,26 @@
+{
+  "name": "od-desktop-ipc-shim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Out-of-tree desktop.sock shim: Chrome headless render-slides for OpenDesign (no upstream edits).",
+  "bin": {
+    "od-desktop-ipc-shim": "./bin/od-desktop-ipc-shim.mjs"
+  },
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "smoke": "tsx scripts/smoke-render.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "puppeteer-core": "24.43.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.2",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3"
+  }
+}
