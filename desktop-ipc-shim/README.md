@@ -1,68 +1,143 @@
 # od-desktop-ipc-shim
 
 Out-of-tree **desktop.sock** shim for [OpenDesign](https://github.com/nexu-io/open-design).  
-Implements `render-slides` with system Chrome/Chromium so `pnpm tools-dev run web` can export screenshot PPTX **without editing upstream sources**.
+Implements `render-slides` with system Chrome/Chromium so OpenDesign web can export PPTX **without editing upstream sources**.
 
-Design: `/home/open-design/specs/current/chrome-headless-slide-renderer/patch-strategy.md`
+Supports:
+
+- **Screenshot PPTX** — per-slide PNGs → daemon stitches
+- **Editable PPTX** — vendored `dom-to-pptx` → native text/shapes (`pptxFile` handoff)
 
 ## Requirements
 
-- OpenDesign checkout with built packages: `packages/sidecar/dist`, `packages/sidecar-proto/dist`
-- Node ≥ 22 (24 preferred)
-- `google-chrome-stable` / Chromium, or `OD_BROWSER_EXECUTABLE_PATH`
-- Do **not** run real Electron desktop on the same namespace (sock conflict)
+| Dependency | Notes |
+|------------|--------|
+| Node.js ≥ 22 (24 preferred) | On `PATH` as `node` |
+| pnpm | For install |
+| Chrome or Chromium | `google-chrome-stable`, `chromium`, or set `OD_BROWSER_EXECUTABLE_PATH` |
+| OpenDesign checkout | Built `packages/sidecar/dist` + `packages/sidecar-proto/dist` |
+| Network (editable) | Google Fonts fetch for CJK embed (Noto Sans SC, etc.) |
+
+Do **not** run Electron OpenDesign desktop on the same IPC namespace (socket conflict).
+
+## Layout
+
+Clone this repo and OpenDesign wherever you like — only env/flags matter:
+
+```text
+<any>/od-patches/desktop-ipc-shim   ← this package
+<any>/open-design                   ← OpenDesign (built)
+```
+
+Paths below use:
+
+- `$SHIM_ROOT` — absolute path to `desktop-ipc-shim`
+- `$OD_ROOT` — absolute path to the OpenDesign checkout
 
 ## Install
 
 ```bash
-cd /home/od-patches/desktop-ipc-shim
+cd "$SHIM_ROOT"
 pnpm install
 ```
 
-## Run
+Vendored engine: `vendor/dom-to-pptx/dom-to-pptx.bundle.js.gz` (browser UMD only; do not `npm install dom-to-pptx`).
+
+## Run (foreground)
+
+Terminal A — OpenDesign (unchanged upstream):
 
 ```bash
-# Terminal A: OpenDesign (unchanged)
-cd /home/open-design && pnpm tools-dev run web --prod --web-port 8786
+cd "$OD_ROOT"
+pnpm tools-dev run web --prod --web-port 8786
+# use the same --namespace as the shim if you set one
+```
 
-# Terminal B: shim
-cd /home/od-patches/desktop-ipc-shim
-pnpm start -- --namespace default --keep-browser
+Terminal B — shim:
+
+```bash
+cd "$SHIM_ROOT"
+export OD_OPEN_DESIGN_ROOT="$OD_ROOT"
+export OD_SIDECAR_NAMESPACE=default          # must match tools-dev
+# optional:
+# export OD_BROWSER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
+# export OD_SHIM_KEEP_BROWSER=1
+
+pnpm start -- --namespace default --keep-browser --open-design-root "$OD_ROOT"
 ```
 
 Or:
 
 ```bash
-node --import tsx src/main.ts --namespace default --keep-browser
+cd "$SHIM_ROOT"
+node --import tsx src/main.ts \
+  --namespace default \
+  --open-design-root "$OD_ROOT" \
+  --keep-browser
 ```
 
-Confirm sock:
+Confirm the socket (namespace `default`):
 
 ```bash
-ls -l /tmp/open-design/ipc/default/desktop.sock
+ls -l "${XDG_RUNTIME_DIR:-/tmp}/open-design/ipc/default/desktop.sock" 2>/dev/null \
+  || ls -l /tmp/open-design/ipc/default/desktop.sock
 ```
 
-Then use the web UI **Export PPTX → screenshot** (editable is not implemented yet).
+Then in the web UI: **Export PPTX → screenshot** or **editable**.
 
-## systemd
+### CLI / env
+
+| Flag / env | Meaning |
+|------------|---------|
+| `--namespace` / `OD_SIDECAR_NAMESPACE` | IPC namespace (must match tools-dev) |
+| `--open-design-root` / `OD_OPEN_DESIGN_ROOT` | OpenDesign tree (required unless a sibling `open-design` is found) |
+| `--chrome` / `OD_BROWSER_EXECUTABLE_PATH` | Chrome/Chromium binary |
+| `--keep-browser` / `OD_SHIM_KEEP_BROWSER=1` | Keep one Chrome warm between jobs |
+
+## Run as a systemd user/system service
+
+Ship a **template** at `systemd/od-desktop-shim.service.example`. Copy and substitute your paths — do not rely on any machine-specific defaults.
 
 ```bash
-sudo cp systemd/od-desktop-shim.service /etc/systemd/system/
+cd "$SHIM_ROOT"
+NODE_BIN="$(command -v node)"
+cp systemd/od-desktop-shim.service.example /tmp/od-desktop-shim.service
+
+# Replace placeholders (GNU sed). Adjust for your install layout.
+sed -i \
+  -e "s|@SHIM_ROOT@|${SHIM_ROOT}|g" \
+  -e "s|@OD_ROOT@|${OD_ROOT}|g" \
+  -e "s|@NODE_BIN@|${NODE_BIN}|g" \
+  -e "s|@CHROME_BIN@|${OD_BROWSER_EXECUTABLE_PATH:-/usr/bin/google-chrome-stable}|g" \
+  /tmp/od-desktop-shim.service
+
+sudo cp /tmp/od-desktop-shim.service /etc/systemd/system/od-desktop-shim.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now od-desktop-shim.service
 sudo systemctl status od-desktop-shim.service
 ```
 
-Adjust `ExecStart` Node path and `OD_OPEN_DESIGN_ROOT` if needed.
+Logs: `journalctl -u od-desktop-shim.service -f`
 
-## Options
+Stop Electron desktop (or another shim) before starting, or change `OD_SIDECAR_NAMESPACE`.
 
-| Flag / env | Meaning |
-|------------|---------|
-| `--namespace` / `OD_SIDECAR_NAMESPACE` | Must match tools-dev namespace |
-| `--open-design-root` / `OD_OPEN_DESIGN_ROOT` | OpenDesign tree (for sidecar dist imports) |
-| `--chrome` / `OD_BROWSER_EXECUTABLE_PATH` | Browser binary |
-| `--keep-browser` / `OD_SHIM_KEEP_BROWSER=1` | Warm Chrome between jobs |
+## Editable PPTX notes
+
+- Stage is fixed **1280×720** (same as screenshot path in this shim).
+- Platform CJK faces that cannot be embedded on Linux render hosts (`PingFang SC`, `Microsoft YaHei`, …) are remapped to **Noto Sans SC** (etc.) and **embedded** into the PPTX (`ppt/fonts/*.fntdata`) so Windows/WPS do not fall back to 宋体.
+- Inline SVGs are rasterized at **4×** CSS size before export.
+- Design detail: `docs/editable-pptx/`.
+
+## Smoke tests
+
+```bash
+cd "$SHIM_ROOT"
+export OD_OPEN_DESIGN_ROOT="$OD_ROOT"   # only needed if sidecar imports resolve via that root for other tools; smokes use Chrome directly
+
+pnpm smoke                 # screenshot path
+pnpm smoke-editable        # editable PPTX ZIP
+pnpm exec tsx scripts/smoke-font-remap.ts   # PingFang → Noto + embed
+```
 
 ## Status
 
@@ -70,10 +145,10 @@ Adjust `ExecStart` Node path and `OD_OPEN_DESIGN_ROOT` if needed.
 |---------|--------|
 | `status` / `shutdown` IPC | done |
 | `render-slides` deck screenshot → `slideFiles` | done |
+| `render-slides` editable PPTX → `pptxFile` | done (MVP + CJK embed remap) |
 | page-mode full capture | basic |
-| editable PPTX (`dom-to-pptx`) | not yet |
 | `stitch` / `export-pdf` / `export-artifact` | not yet |
 
 ## Upgrade note
 
-When pulling OpenDesign, re-check `DesktopRenderSlides*` / `render-slides` in `sidecar-proto`. This package should not need changes if the IPC contract is stable.
+When updating OpenDesign, re-check `DesktopRenderSlides*` / `render-slides` in `sidecar-proto`. This package should not need changes if the IPC contract is stable.

@@ -1,6 +1,6 @@
 /**
  * Chrome / Chromium headless implementation of DesktopRenderSlides*.
- * Screenshot MVP; editable returns a clear RENDER_FAILED until Phase 2.
+ * Screenshot + editable PPTX (dom-to-pptx) via system Chrome.
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
@@ -8,6 +8,7 @@ import path from "node:path";
 
 import puppeteer, { type Browser, type Page } from "puppeteer-core";
 
+import { renderEditablePptx } from "./editable-pptx.js";
 import { findBrowserExecutable } from "./find-browser.js";
 import {
   DECK_STAGE_SELECTOR,
@@ -91,9 +92,10 @@ async function emitImages(
 async function evalFn<T>(page: Page, fn: (...args: never[]) => unknown, ...args: unknown[]): Promise<T> {
   // Build the runner in Node with new Function so Puppeteer serializes a clean
   // `function anonymous(){ return (fn).apply(...) }` — never pass a tsx-wrapped
-  // closure into page.evaluate (that injects __name).
+  // closure into page.evaluate (that injects __name). Stub __name for nested
+  // helpers that tsx still rewrites inside .mjs pageFns.
   const runner = new Function(
-    `return (${fn.toString()}).apply(null, ${JSON.stringify(args)});`,
+    `var __name=function(f){return f}; return (${fn.toString()}).apply(null, ${JSON.stringify(args)});`,
   ) as () => T;
   return page.evaluate(runner);
 }
@@ -124,15 +126,6 @@ async function captureViewport(page: Page, jpeg: boolean, stage: { w: number; h:
 }
 
 async function renderWithPage(page: Page, input: RenderSlidesInput): Promise<RenderSlidesResult> {
-  if (input.editable) {
-    return {
-      ok: false,
-      error:
-        "editable PPTX is not implemented in od-desktop-ipc-shim yet; use screenshot mode or Electron desktop",
-      errorCode: "RENDER_FAILED",
-    };
-  }
-
   const doc = injectBaseHref(input.html, input.baseHref);
   await page.setViewport({
     width: SLIDE_W,
@@ -202,6 +195,10 @@ async function renderWithPage(page: Page, input: RenderSlidesInput): Promise<Ren
     await evalFn(page, pageFns.lockExportGeometry, stage.w, stage.h, SLIDE_SELECTOR, DECK_STAGE_SELECTOR);
   }
   await evalFn(page, pageFns.waitFontsAndFrames);
+
+  if (input.editable) {
+    return renderEditablePptx(page, stage, input.outputDir, SLIDE_SELECTOR);
+  }
 
   if (input.index != null && (input.index < 0 || input.index >= count)) {
     return {

@@ -4,12 +4,31 @@
  */
 
 import { access } from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, existsSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { launchBrowser, renderSlides, type RenderSlidesInput } from "./chrome-renderer.js";
 import { findBrowserExecutable } from "./find-browser.js";
+
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+function resolveOpenDesignRoot(explicit: string | null): string {
+  if (explicit) return path.resolve(explicit);
+  const fromEnv = process.env.OD_OPEN_DESIGN_ROOT?.trim();
+  if (fromEnv) return path.resolve(fromEnv);
+  // Common local layouts: sibling of this package, or sibling of the od-patches repo.
+  const candidates = [
+    path.resolve(PACKAGE_ROOT, "../open-design"),
+    path.resolve(PACKAGE_ROOT, "../../open-design"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(path.join(candidate, "packages/sidecar/dist/index.mjs"))) return candidate;
+  }
+  throw new Error(
+    "OpenDesign root not found. Set OD_OPEN_DESIGN_ROOT or pass --open-design-root <path>.",
+  );
+}
 
 type SidecarModules = {
   createJsonIpcServer: (opts: {
@@ -43,14 +62,14 @@ function parseArgs(argv: string[]): {
   keepBrowser: boolean;
 } {
   let namespace = process.env.OD_SIDECAR_NAMESPACE || process.env.OD_NAMESPACE || "default";
-  let openDesignRoot = process.env.OD_OPEN_DESIGN_ROOT || "/home/open-design";
+  let openDesignRootArg: string | null = null;
   let chrome: string | null = process.env.OD_BROWSER_EXECUTABLE_PATH || null;
   let keepBrowser = process.env.OD_SHIM_KEEP_BROWSER === "1";
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--namespace" && argv[i + 1]) namespace = argv[++i]!;
-    else if (a === "--open-design-root" && argv[i + 1]) openDesignRoot = argv[++i]!;
+    else if (a === "--open-design-root" && argv[i + 1]) openDesignRootArg = argv[++i]!;
     else if (a === "--chrome" && argv[i + 1]) chrome = argv[++i]!;
     else if (a === "--keep-browser") keepBrowser = true;
     else if (a === "-h" || a === "--help") {
@@ -58,7 +77,12 @@ function parseArgs(argv: string[]): {
       process.exit(0);
     }
   }
-  return { namespace, openDesignRoot, chrome, keepBrowser };
+  return {
+    namespace,
+    openDesignRoot: resolveOpenDesignRoot(openDesignRootArg),
+    chrome,
+    keepBrowser,
+  };
 }
 
 function printHelp(): void {
@@ -69,7 +93,7 @@ Usage:
 
 Options:
   --namespace <name>         IPC namespace (default: default / OD_SIDECAR_NAMESPACE)
-  --open-design-root <path>  OpenDesign checkout (default: /home/open-design)
+  --open-design-root <path>  OpenDesign checkout (or OD_OPEN_DESIGN_ROOT; else sibling open-design/)
   --chrome <path>            Chrome/Chromium binary (or OD_BROWSER_EXECUTABLE_PATH)
   --keep-browser             Keep one Chrome process warm between jobs
   -h, --help                 Show help

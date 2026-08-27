@@ -6,8 +6,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Replace placeholders before install (see README):
-#   @SHIM_ROOT@  @OD_ROOT@  @NODE_BIN@  @CHROME_BIN@
+# Placeholders — replaced when installing (see README):
+#   @SHIM_ROOT@  absolute path to desktop-ipc-shim
+#   @OD_ROOT@    absolute path to OpenDesign checkout
+#   @NODE_BIN@   absolute path to node (≥22)
+#   @CHROME_BIN@ Chrome/Chromium binary
 WorkingDirectory=@SHIM_ROOT@
 Environment=OD_OPEN_DESIGN_ROOT=@OD_ROOT@
 Environment=OD_SIDECAR_NAMESPACE=default
