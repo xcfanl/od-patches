@@ -12,6 +12,9 @@
     "smoke": "tsx scripts/smoke-render.ts",
     "smoke-editable": "tsx scripts/smoke-editable.ts",
     "smoke-font-remap": "tsx scripts/smoke-font-remap.ts",
+    "smoke-speaker-notes": "tsx scripts/smoke-speaker-notes.ts",
+    "smoke-svg-style": "tsx scripts/smoke-svg-style.ts",
+    "smoke-deco-position": "tsx scripts/smoke-deco-position.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {

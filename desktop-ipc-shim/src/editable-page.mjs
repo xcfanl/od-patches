@@ -486,9 +486,101 @@ export const editablePageFns = {
     var SVG_RASTER_SCALE = 4;
     var SVG_RASTER_MAX_EDGE = 8192;
 
+    // Copy used/computed paints onto the clone so standalone SVG data-URLs keep
+    // CSS-variable and currentColor styling (var(--accent), theme colors, etc.).
+    function inlineSvgStyles(source, target) {
+      var computed = getComputedStyle(source);
+      var paintAttrs = ["fill", "stroke", "stop-color", "flood-color"];
+      for (var p = 0; p < paintAttrs.length; p++) {
+        var attr = paintAttrs[p];
+        var used = computed.getPropertyValue(attr);
+        if (used && String(used).trim() !== "") {
+          target.setAttribute(attr, used);
+        }
+      }
+      var extras = [
+        ["stroke-width", "stroke-width"],
+        ["stroke-linecap", "stroke-linecap"],
+        ["stroke-linejoin", "stroke-linejoin"],
+        ["stroke-dasharray", "stroke-dasharray"],
+        ["stroke-opacity", "stroke-opacity"],
+        ["fill-opacity", "fill-opacity"],
+        ["opacity", "opacity"],
+      ];
+      for (var e = 0; e < extras.length; e++) {
+        var cssName = extras[e][0];
+        var outAttr = extras[e][1];
+        var val = computed.getPropertyValue(cssName);
+        if (val && val !== "" && val !== "auto" && val !== "normal") {
+          target.setAttribute(outAttr, val);
+        }
+      }
+      var styleAttr = target.getAttribute("style");
+      if (styleAttr && /var\(|currentColor/i.test(styleAttr)) {
+        target.removeAttribute("style");
+      }
+      var srcKids = source.children;
+      var tgtKids = target.children;
+      for (var i = 0; i < srcKids.length; i++) {
+        if (tgtKids[i]) inlineSvgStyles(srcKids[i], tgtKids[i]);
+      }
+    }
+
+    /**
+     * Pin a rasterized SVG replacement to the same CSS box as the original.
+     * Without this, position:absolute deco (corner marks, watermarks) collapses
+     * into normal flow and stacks with title/body like body content.
+     */
+    function applyRasterImgGeometry(svg, img, slide, w, h) {
+      var style = getComputedStyle(svg);
+      var classAttr = svg.getAttribute("class");
+      if (classAttr) img.setAttribute("class", classAttr);
+      var ariaHidden = svg.getAttribute("aria-hidden");
+      if (ariaHidden != null) img.setAttribute("aria-hidden", ariaHidden);
+      img.setAttribute("alt", "");
+      img.setAttribute("width", String(w));
+      img.setAttribute("height", String(h));
+      img.style.cssText =
+        "display:block;width:" +
+        w +
+        "px;height:" +
+        h +
+        "px;margin:0;padding:0;border:0;max-width:none;max-height:none;";
+
+      var position = style.position;
+      if (position === "absolute" || position === "fixed") {
+        var svgRect = svg.getBoundingClientRect();
+        // Prefer the positioned containing block; fall back to the slide.
+        var containing = svg.offsetParent;
+        if (!containing || containing === document.body || containing === document.documentElement) {
+          containing = slide;
+        }
+        var cRect = containing.getBoundingClientRect();
+        var left = Math.round(svgRect.left - cRect.left);
+        var top = Math.round(svgRect.top - cRect.top);
+        img.style.setProperty("position", "absolute", "important");
+        img.style.setProperty("left", left + "px", "important");
+        img.style.setProperty("top", top + "px", "important");
+        img.style.setProperty("right", "auto", "important");
+        img.style.setProperty("bottom", "auto", "important");
+        if (style.zIndex && style.zIndex !== "auto") {
+          img.style.setProperty("z-index", style.zIndex, "important");
+        }
+        img.style.setProperty("pointer-events", "none", "important");
+      }
+      if (style.opacity && style.opacity !== "1") {
+        img.style.setProperty("opacity", style.opacity, "important");
+      }
+      if (style.transform && style.transform !== "none") {
+        img.style.setProperty("transform", style.transform, "important");
+        img.style.setProperty("transform-origin", style.transformOrigin, "important");
+      }
+    }
+
     function rasterizeInlineSvgs(slides) {
       for (var s = 0; s < slides.length; s++) {
-        var svgs = Array.prototype.slice.call(slides[s].querySelectorAll("svg"));
+        var slide = slides[s];
+        var svgs = Array.prototype.slice.call(slide.querySelectorAll("svg"));
         for (var i = 0; i < svgs.length; i++) {
           var svg = svgs[i];
           if (svg.getAttribute("data-od-pptx-rasterized") === "1") continue;
@@ -512,41 +604,43 @@ export const editablePageFns = {
             clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
             clone.setAttribute("width", String(rw));
             clone.setAttribute("height", String(rh));
-            if (!clone.getAttribute("viewBox") && svg.viewBox && svg.viewBox.baseVal) {
-              var vb = svg.viewBox.baseVal;
-              if (vb.width > 0 && vb.height > 0) {
+            if (!clone.getAttribute("viewBox")) {
+              if (svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width > 0) {
+                var vb = svg.viewBox.baseVal;
                 clone.setAttribute(
                   "viewBox",
                   vb.x + " " + vb.y + " " + vb.width + " " + vb.height,
                 );
+              } else {
+                clone.setAttribute("viewBox", "0 0 " + w + " " + h);
               }
             }
+            inlineSvgStyles(svg, clone);
+            // Ensure currentColor paints resolve even if computed stroke was empty.
             clone.querySelectorAll("*").forEach(function (node) {
               ["fill", "stroke", "stop-color", "flood-color"].forEach(function (attr) {
                 var val = node.getAttribute(attr);
                 if (val && /currentColor/i.test(val)) node.setAttribute(attr, color);
               });
-              var styleAttr = node.getAttribute("style");
-              if (styleAttr && /currentColor/i.test(styleAttr)) {
-                node.setAttribute("style", styleAttr.replace(/currentColor/gi, color));
-              }
             });
             var xml = new XMLSerializer().serializeToString(clone);
             if (/currentColor/i.test(xml)) xml = xml.replace(/currentColor/gi, color);
+            // Drop unresolved CSS vars — they render blank in standalone SVG images.
+            if (/var\(/i.test(xml)) {
+              xml = xml.replace(
+                /\s(fill|stroke|stop-color|flood-color)="var\([^"]*\)"/gi,
+                function (_m, attrName) {
+                  if (String(attrName).toLowerCase() === "fill") return ' fill="none"';
+                  return " " + attrName + '="' + color + '"';
+                },
+              );
+            }
             var dataUrl = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(xml);
             var img = document.createElement("img");
             img.setAttribute("data-od-pptx-rasterized", "1");
             img.setAttribute("data-od-pptx-raster-w", String(rw));
             img.setAttribute("data-od-pptx-raster-h", String(rh));
-            img.setAttribute("alt", "");
-            img.setAttribute("width", String(w));
-            img.setAttribute("height", String(h));
-            img.style.cssText =
-              "display:block;width:" +
-              w +
-              "px;height:" +
-              h +
-              "px;margin:0;padding:0;border:0;max-width:none;max-height:none;";
+            applyRasterImgGeometry(svg, img, slide, w, h);
             img.src = dataUrl;
             svg.parentNode.insertBefore(img, svg);
             svg.remove();
@@ -768,6 +862,84 @@ export const editablePageFns = {
       });
     }
 
+    function htmlToPlainNotes(html) {
+      var tmp = document.createElement("div");
+      tmp.innerHTML = html || "";
+      tmp.querySelectorAll("script,style").forEach(function (el) {
+        el.remove();
+      });
+      tmp.querySelectorAll("br").forEach(function (br) {
+        br.replaceWith("\n");
+      });
+      tmp.querySelectorAll("p,div,li,h1,h2,h3,h4,h5,h6").forEach(function (block) {
+        block.appendChild(document.createTextNode("\n"));
+      });
+      return (tmp.innerText || tmp.textContent || "")
+        .replace(/\r\n?/g, "\n")
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+    }
+
+    function readSpeakerNotesJson() {
+      var tag = document.getElementById("speaker-notes");
+      if (!tag) return [];
+      try {
+        var parsed = JSON.parse(tag.textContent || "[]");
+        if (Array.isArray(parsed)) {
+          return parsed.map(function (item) {
+            if (typeof item === "string") return item.trim();
+            if (item && typeof item.text === "string") return item.text.trim();
+            return String(item ?? "").trim();
+          });
+        }
+        if (parsed && typeof parsed === "object" && Array.isArray(parsed.notes)) {
+          return parsed.notes.map(function (item) {
+            return String(item ?? "").trim();
+          });
+        }
+      } catch (_) {}
+      return [];
+    }
+
+    // Prefer per-slide .notes / aside.notes / .speaker-notes / data-*; fall back
+    // to document #speaker-notes JSON array (deck-stage / OpenDesign convention).
+    function collectSpeakerNotes(slides) {
+      var jsonNotes = readSpeakerNotesJson();
+      return slides.map(function (slide, index) {
+        var noteEl = null;
+        var noteCandidates = slide.querySelectorAll(
+          ".notes, aside.notes, .speaker-notes, [data-speaker-notes]",
+        );
+        for (var ni = 0; ni < noteCandidates.length; ni++) {
+          var cand = noteCandidates[ni];
+          if (cand.closest(".notes-overlay, .overview, .thumb, .mini-slide")) continue;
+          noteEl = cand;
+          break;
+        }
+        if (noteEl) {
+          var fromEl = htmlToPlainNotes(noteEl.innerHTML);
+          if (fromEl) return fromEl;
+        }
+        var attr =
+          slide.getAttribute("data-notes") ||
+          slide.getAttribute("data-speaker-notes") ||
+          slide.getAttribute("data-od-notes");
+        if (attr && attr.trim()) return attr.trim();
+        if (jsonNotes[index] && String(jsonNotes[index]).trim()) return String(jsonNotes[index]).trim();
+        return "";
+      });
+    }
+
+    function installSpeakerNotesHook(slides) {
+      var notes = collectSpeakerNotes(slides);
+      globalThis.__odPptxSlideNotes = function (index) {
+        var text = notes[index] || "";
+        return text.trim() ? text : "";
+      };
+      return notes.filter(Boolean).length;
+    }
+
     try {
       var win = window;
       if (!win.domToPptx || typeof win.domToPptx.exportToPptx !== "function") {
@@ -809,6 +981,7 @@ export const editablePageFns = {
 
       if (phase === "prepare") return { prepared: true };
 
+      var notesCount = installSpeakerNotesHook(slides);
       var exportOpts = {
         fileName: "deck.pptx",
         skipDownload: true,
@@ -818,7 +991,16 @@ export const editablePageFns = {
       };
       if (importedFonts.length > 0) exportOpts.fonts = importedFonts;
 
-      var blob = await win.domToPptx.exportToPptx(slides, exportOpts);
+      var blob;
+      try {
+        blob = await win.domToPptx.exportToPptx(slides, exportOpts);
+      } finally {
+        try {
+          delete globalThis.__odPptxSlideNotes;
+        } catch (_) {
+          globalThis.__odPptxSlideNotes = undefined;
+        }
+      }
       if (!blob || typeof blob.arrayBuffer !== "function") {
         return { error: "dom-to-pptx returned no blob" };
       }
@@ -828,7 +1010,7 @@ export const editablePageFns = {
       for (var i = 0; i < bytes.length; i += CHUNK) {
         binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)));
       }
-      return { b64: btoa(binary) };
+      return { b64: btoa(binary), notesCount: notesCount };
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
     }

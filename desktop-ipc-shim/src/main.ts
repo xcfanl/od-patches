@@ -60,11 +60,13 @@ function parseArgs(argv: string[]): {
   openDesignRoot: string;
   chrome: string | null;
   keepBrowser: boolean;
+  keepExportDir: string | null;
 } {
   let namespace = process.env.OD_SIDECAR_NAMESPACE || process.env.OD_NAMESPACE || "default";
   let openDesignRootArg: string | null = null;
   let chrome: string | null = process.env.OD_BROWSER_EXECUTABLE_PATH || null;
   let keepBrowser = process.env.OD_SHIM_KEEP_BROWSER === "1";
+  let keepExportDir: string | null = process.env.OD_SHIM_KEEP_EXPORT_DIR?.trim() || null;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -72,6 +74,7 @@ function parseArgs(argv: string[]): {
     else if (a === "--open-design-root" && argv[i + 1]) openDesignRootArg = argv[++i]!;
     else if (a === "--chrome" && argv[i + 1]) chrome = argv[++i]!;
     else if (a === "--keep-browser") keepBrowser = true;
+    else if (a === "--keep-export-dir" && argv[i + 1]) keepExportDir = argv[++i]!;
     else if (a === "-h" || a === "--help") {
       printHelp();
       process.exit(0);
@@ -82,6 +85,7 @@ function parseArgs(argv: string[]): {
     openDesignRoot: resolveOpenDesignRoot(openDesignRootArg),
     chrome,
     keepBrowser,
+    keepExportDir: keepExportDir && keepExportDir.length > 0 ? keepExportDir : null,
   };
 }
 
@@ -96,6 +100,7 @@ Options:
   --open-design-root <path>  OpenDesign checkout (or OD_OPEN_DESIGN_ROOT; else sibling open-design/)
   --chrome <path>            Chrome/Chromium binary (or OD_BROWSER_EXECUTABLE_PATH)
   --keep-browser             Keep one Chrome process warm between jobs
+  --keep-export-dir <path>   Keep a copy of editable deck.pptx here (or OD_SHIM_KEEP_EXPORT_DIR); off by default
   -h, --help                 Show help
 
 Does not modify open-design. Stop real Electron desktop before starting.
@@ -130,6 +135,13 @@ async function assertDist(openDesignRoot: string): Promise<void> {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   await assertDist(args.openDesignRoot);
+
+  if (args.keepExportDir) {
+    process.env.OD_SHIM_KEEP_EXPORT_DIR = path.resolve(args.keepExportDir);
+    console.info("[shim] keep-export-dir", process.env.OD_SHIM_KEEP_EXPORT_DIR);
+  } else {
+    delete process.env.OD_SHIM_KEEP_EXPORT_DIR;
+  }
 
   const chromePath = findBrowserExecutable(args.chrome);
   if (!chromePath) {

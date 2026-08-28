@@ -113,6 +113,7 @@ Then in the web UI: **Export PPTX → screenshot** or **editable**.
 | `--open-design-root` / `OD_OPEN_DESIGN_ROOT` | OpenDesign tree (required unless a sibling `open-design` is found) |
 | `--chrome` / `OD_BROWSER_EXECUTABLE_PATH` | Chrome/Chromium binary |
 | `--keep-browser` / `OD_SHIM_KEEP_BROWSER=1` | Keep one Chrome warm between jobs |
+| `--keep-export-dir` / `OD_SHIM_KEEP_EXPORT_DIR` | Optional: keep a copy of editable `deck.pptx` after export under this directory. Off when unset. Daemon scratch is still deleted. |
 
 ## Run as a systemd user/system service
 
@@ -145,7 +146,12 @@ Stop Electron desktop (or another shim) before starting, or change `OD_SIDECAR_N
 
 - Stage is fixed **1280×720** (same as screenshot path in this shim).
 - Platform CJK faces that cannot be embedded on Linux render hosts (`PingFang SC`, `Microsoft YaHei`, …) are remapped to **Noto Sans SC** (etc.) and **embedded** into the PPTX (`ppt/fonts/*.fntdata`) so Windows/WPS do not fall back to 宋体.
-- Inline SVGs are rasterized at **4×** CSS size before export.
+- Per-slide speaker notes (逐字稿) are written into PPT **Notes** (`#speaker-notes` JSON and/or `.notes` / `aside.notes` / `.speaker-notes` in the slide).
+- Inline SVGs are rasterized at **4×** CSS size before export; computed paints (`var(--*)`, `currentColor`) are inlined so styles survive standalone SVG→PNG.
+- Absolute decorative SVGs (`.deco-mark`, `.deco-corner`, etc.) keep **position/opacity** when replaced with PNG — they stay as corner/watermark layers instead of collapsing into the title/body flow.
+- Engine-generated decorative SVG dual-embeds (`svgBlip` PNG+SVG) are flattened to **PNG-only** after export — avoids WPS/older PowerPoint treating the package as damaged.
+- Real photo `<img>` assets are **materialized to data URLs** before canvas embed (setContent/data: documents are origin `null`; without this, CORS-tainted photos never land in the PPTX).
+- `.slide-bg` photo layers (img + `::after` dimming overlay) are baked to a single PNG so designed contrast/structure survives.
 - Design detail: `docs/editable-pptx/`.
 
 ## Smoke tests
